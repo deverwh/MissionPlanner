@@ -1,20 +1,14 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Drawing;
-using System.Linq;
-using System.Text;
 using System.Windows.Forms;
-using Flurl.Util;
 using ZedGraph;
 
 namespace MissionPlanner.Swarm.WaypointLeader
 {
     public partial class WPControl : Form
     {
-        static DroneGroup DG = new DroneGroup();
-        static bool threadrun;
+        DroneGroup DG = new DroneGroup();
+        bool threadrun;
 
         public WPControl()
         {
@@ -24,6 +18,8 @@ namespace MissionPlanner.Swarm.WaypointLeader
 
             zedGraphControl1.GraphPane.XAxis.Title.Text = "Distance";
             zedGraphControl1.GraphPane.YAxis.Title.Text = "Altitude";
+
+            DG.Drones.Clear();
         }
 
         private void but_master_Click(object sender, EventArgs e)
@@ -36,7 +32,7 @@ namespace MissionPlanner.Swarm.WaypointLeader
             {
                 foreach (var MAV in port.MAVlist)
                 {
-                    DG.Drones.Add(new Drone() { MavState = MAV});
+                    DG.Drones.Add(new Drone() { MavState = MAV });
                 }
             }
         }
@@ -84,6 +80,22 @@ namespace MissionPlanner.Swarm.WaypointLeader
                 but_start.Text = Strings.Start;
                 return;
             }
+
+            foreach (var port in MainV2.Comports)
+            {
+                foreach (var MAV in port.MAVlist)
+                {
+                    if (MAV.cs.armed && MAV.cs.alt > 1)
+                    {
+                        var result = CustomMessageBox.Show("There appears to be a drone in the air at the moment. Are you sure you want to continue?", "continue", MessageBoxButtons.YesNo);
+                        if (result == (int)DialogResult.Yes)
+                            break;
+                        return;
+                    }
+                }
+            }
+
+            zedGraphControl1.AxisChange();
 
             //if (SwarmInterface != null)
             {
@@ -170,7 +182,7 @@ namespace MissionPlanner.Swarm.WaypointLeader
                     }
                 }
 
-                if(!found)
+                if (!found)
                     ctl.Dispose();
             }
 
@@ -187,34 +199,34 @@ namespace MissionPlanner.Swarm.WaypointLeader
                             exists = true;
                             if (MAV.cs.gpsstatus < 3)
                             {
-                                ((Status) ctl).GPS.Text = "Bad";
+                                ((Status)ctl).GPS.Text = "Bad";
                             }
                             else if (MAV.cs.gpsstatus >= 3)
                             {
-                                ((Status) ctl).GPS.Text = "OK " + Math.Max(MAV.cs.gpsstatus, MAV.cs.gpsstatus2);
+                                ((Status)ctl).GPS.Text = "OK " + Math.Max(MAV.cs.gpsstatus, MAV.cs.gpsstatus2);
                             }
-                            ((Status) ctl).Armed.Text = MAV.cs.armed.ToString();
-                            ((Status) ctl).Mode.Text = MAV.cs.mode;
-                            ((Status) ctl).MAV.Text = String.Format("MAV {0}-{1}",MAV.sysid,MAV.compid);
-                            ((Status) ctl).Guided.Text = MAV.GuidedMode.x + "," + MAV.GuidedMode.y + "," +
+                            ((Status)ctl).Armed.Text = MAV.cs.armed.ToString();
+                            ((Status)ctl).Mode.Text = MAV.cs.mode;
+                            ((Status)ctl).MAV.Text = String.Format("MAV {0}-{1}", MAV.sysid, MAV.compid);
+                            ((Status)ctl).Guided.Text = MAV.GuidedMode.x / 1e7 + "," + MAV.GuidedMode.y / 1e7 + "," +
                                                          MAV.GuidedMode.z;
-                            ((Status)ctl).Location.Text = MAV.cs.lat.ToString("0.00000") + "," + MAV.cs.lng.ToString("0.00000") + "," +
+                            ((Status)ctl).Location1.Text = MAV.cs.lat.ToString("0.00000") + "," + MAV.cs.lng.ToString("0.00000") + "," +
                                                       MAV.cs.alt;
                             ((Status)ctl).Speed.Text = MAV.cs.groundspeed.ToString("0.00");
 
                             if (MAV == DG.airmaster)
-                                ((Status) ctl).MAV.Text = String.Format("MAV {0}-{1} airmaster", MAV.sysid, MAV.compid);
+                                ((Status)ctl).MAV.Text = String.Format("MAV {0}-{1} airmaster", MAV.sysid, MAV.compid);
 
                             if (MAV == DG.groundmaster)
                                 ((Status)ctl).MAV.Text = String.Format("MAV {0}-{1} groundmaster", MAV.sysid, MAV.compid);
 
                             if (MAV == DG.airmaster || MAV == DG.groundmaster)
                             {
-                                ((Status) ctl).ForeColor = Color.Red;
+                                ((Status)ctl).ForeColor = Color.Red;
                             }
                             else
                             {
-                                ((Status) ctl).ForeColor = Color.Black;
+                                ((Status)ctl).ForeColor = Color.Black;
                             }
                         }
                     }
@@ -238,7 +250,7 @@ namespace MissionPlanner.Swarm.WaypointLeader
                         // create the curve
                         zedGraphControl1.GraphPane.CurveList.Add(
                             new LineItem("MAV " + drone.MavState.sysid.ToString(),
-                                new PointPairList(new[] {(double) drone.PathIndex}, new[] {drone.Location.Alt}),
+                                new PointPairList(new[] { (double)drone.PathIndex }, new[] { drone.Location.Alt }),
                                 colours[zedGraphControl1.GraphPane.CurveList.Count % colours.Length],
                                 SymbolType.Triangle));
 
@@ -250,15 +262,19 @@ namespace MissionPlanner.Swarm.WaypointLeader
                     // update the curve
                     var curve = zedGraphControl1.GraphPane.CurveList["MAV " + drone.MavState.sysid.ToString()];
                     curve.Clear();
-                    curve.AddPoint((double)(drone.PathIndex*0.1), drone.Location.Alt);
+                    try
+                    {
+                        curve.AddPoint((double)(drone.PathIndex * 0.1), drone.Location.Alt);
+                    }
+                    catch { }
                 }
             }
 
             zedGraphControl1.Invalidate();
         }
 
-       Color[] colours = new Color[]
-       {
+        Color[] colours = new Color[]
+        {
             Color.Red,
             Color.Green,
             Color.Blue,
@@ -273,10 +289,24 @@ namespace MissionPlanner.Swarm.WaypointLeader
             Color.Aqua,
             Color.Brown,
             Color.WhiteSmoke
-       };
+        };
 
         private void but_resetmode_Click(object sender, EventArgs e)
         {
+            foreach (var port in MainV2.Comports)
+            {
+                foreach (var MAV in port.MAVlist)
+                {
+                    if (MAV.cs.armed && MAV.cs.alt > 1)
+                    {
+                        var result = CustomMessageBox.Show("There appears to be a drone in the air at the moment. Are you sure you want to continue?", "continue", MessageBoxButtons.YesNo);
+                        if (result == (int)DialogResult.Yes)
+                            break;
+                        return;
+                    }
+                }
+            }
+
             DG.CurrentMode = DroneGroup.Mode.idle;
         }
 
@@ -303,6 +333,22 @@ namespace MissionPlanner.Swarm.WaypointLeader
         private void chk_alt_interleave_CheckedChanged(object sender, EventArgs e)
         {
             DG.AltInterleave = chk_alt_interleave.Checked;
+        }
+
+        private void WPControl_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            threadrun = false;
+            System.Threading.Thread.Sleep(500);
+        }
+
+        private void but_setmoderltland_Click(object sender, EventArgs e)
+        {
+            DG.CurrentMode = DroneGroup.Mode.LandAlt;
+        }
+
+        private void num_wpnav_accel_ValueChanged(object sender, EventArgs e)
+        {
+            DG.WPNAV_ACCEL = num_wpnav_accel.Value;
         }
     }
 }

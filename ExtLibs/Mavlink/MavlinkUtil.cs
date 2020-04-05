@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -18,12 +19,16 @@ public static class MavlinkUtil
     /// <param name="bytearray">The bytes of the mavlink packet</param>
     /// <param name="startoffset">The position in the byte array where the packet starts</param>
     /// <returns>The newly created mavlink packet</returns>
+
     public static TMavlinkPacket ByteArrayToStructure<TMavlinkPacket>(this byte[] bytearray, int startoffset = 6)
         where TMavlinkPacket : struct
     {
+#if UNSAFE
         return ReadUsingPointer<TMavlinkPacket>(bytearray, startoffset);
+#else
+        return ByteArrayToStructureGC<TMavlinkPacket>(bytearray, startoffset);
+#endif
     }
-
     public static TMavlinkPacket ByteArrayToStructureBigEndian<TMavlinkPacket>(this byte[] bytearray,
         int startoffset = 6) where TMavlinkPacket : struct
     {
@@ -32,8 +37,11 @@ public static class MavlinkUtil
         return (TMavlinkPacket) newPacket;
     }
 
-    public static void ByteArrayToStructure(byte[] bytearray, ref object obj, int startoffset,int payloadlength = 0)
+    public static void ByteArrayToStructure(byte[] bytearray, ref object obj, int startoffset, int payloadlength = 0)
     {
+        if (bytearray == null || bytearray.Length < (startoffset + payloadlength) || payloadlength == 0)
+            return;
+
         int len = Marshal.SizeOf(obj);
 
         IntPtr iptr = Marshal.AllocHGlobal(len);
@@ -41,23 +49,16 @@ public static class MavlinkUtil
         //clear memory
         for (int i = 0; i < len; i += 8)
         {
-            Marshal.WriteInt64(iptr,i, 0x00);
+            Marshal.WriteInt64(iptr, i, 0x00);
         }
 
-        for (int i = len % 8; i < -1; i--)
+        for (int i = len - (len % 8); i < len; i++)
         {
-            Marshal.WriteByte(iptr, len - i, 0x00);
+            Marshal.WriteByte(iptr, i, 0x00);
         }
 
-        try
-        {
-            // copy byte array to ptr
-            Marshal.Copy(bytearray, startoffset, iptr, payloadlength);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("ByteArrayToStructure FAIL " + ex.Message);
-        }
+        // copy byte array to ptr
+        Marshal.Copy(bytearray, startoffset, iptr, payloadlength);
 
         obj = Marshal.PtrToStructure(iptr, obj.GetType());
 
@@ -66,6 +67,9 @@ public static class MavlinkUtil
 
     public static TMavlinkPacket ByteArrayToStructureT<TMavlinkPacket>(byte[] bytearray, int startoffset)
     {
+        if (bytearray == null || bytearray.Length < startoffset)
+            return default(TMavlinkPacket);
+
         int len = bytearray.Length - startoffset;
 
         IntPtr i = Marshal.AllocHGlobal(len);
@@ -98,9 +102,11 @@ public static class MavlinkUtil
             Array.Resize(ref payload, length);
         return payload;
     }
-
+#if UNSAFE
     public static T ReadUsingPointer<T>(byte[] data, int startoffset) where T : struct
     {
+        if (data == null || data.Length < (startoffset))
+            return default(T);
         unsafe
         {
             fixed (byte* p = &data[startoffset])
@@ -109,7 +115,7 @@ public static class MavlinkUtil
             }
         }
     }
-
+#endif
     public static T ByteArrayToStructureGC<T>(byte[] bytearray, int startoffset) where T : struct
     {
         GCHandle gch = GCHandle.Alloc(bytearray, GCHandleType.Pinned);
@@ -135,7 +141,7 @@ public static class MavlinkUtil
 
         // do endian swap
         object thisBoxed = obj;
-        Type test = thisBoxed.GetType();
+        var test = thisBoxed.GetType();
 
         int reversestartoffset = startoffset;
 
@@ -317,6 +323,7 @@ public static class MavlinkUtil
                 return item;
         }
 
-        return source[0];
+        Console.WriteLine("Unknown Packet " + msgid);
+        return new MAVLink.message_info();
     }
 }

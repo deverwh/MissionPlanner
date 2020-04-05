@@ -16,9 +16,9 @@ namespace MissionPlanner.Utilities
         private static readonly ILog log =
             LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
-        private static Dictionary<string, short[,]> cache = new Dictionary<string, short[,]>();
+        private static Dictionary<string, float[,]> cache = new Dictionary<string, float[,]>();
 
-        private static List<geotiffdata> index = new List<geotiffdata>();
+        public static List<geotiffdata> index = new List<geotiffdata>();
 
         public class geotiffdata
         {
@@ -56,6 +56,8 @@ namespace MissionPlanner.Utilities
 
                     log.InfoFormat("Coverage {0}", Area.ToString());
 
+                    log.InfoFormat("CacheAble {0}", cacheable.ToString());
+
                     // starts from top left so x + y -
                     x += xscale / 2.0;
                     y -= yscale / 2.0;
@@ -88,6 +90,17 @@ namespace MissionPlanner.Utilities
                 }
 
                 return true;
+            }
+
+            private long size = -1;
+
+            public bool cacheable
+            {
+                get
+                {
+                    if (size == -1) size = new FileInfo(FileName).Length;
+                    return size < 1024 * 1024 * 1000;
+                }
             }
 
             public string FileName;
@@ -145,27 +158,78 @@ namespace MissionPlanner.Utilities
                 if (geotiffdata.Area.Contains(lat, lng))
                 {
                     // add to cache
-                    if (!cache.ContainsKey(geotiffdata.FileName))
+                    if (!cache.ContainsKey(geotiffdata.FileName) && geotiffdata.cacheable)
                     {
-                        short[,] altdata = new short[geotiffdata.height, geotiffdata.width];
+                        if (!File.Exists(geotiffdata.FileName))
+                            continue;
+
+                        float[,] altdata = new float[geotiffdata.height, geotiffdata.width];
 
                         using (Tiff tiff = Tiff.Open(geotiffdata.FileName, "r"))
                         {
-                            byte[] scanline = new byte[tiff.ScanlineSize()];
-
-                            for (int row = 0; row < geotiffdata.height; row++)
+                            if (tiff.GetField(TiffTag.TILEWIDTH).Length >= 1)
                             {
-                                tiff.ReadScanline(scanline, row);
+                                FieldValue[] value = tiff.GetField(TiffTag.IMAGEWIDTH);
+                                int imageWidth = value[0].ToInt();
 
-                                for (int col = 0; col < geotiffdata.width; col++)
+                                value = tiff.GetField(TiffTag.IMAGELENGTH);
+                                int imageLength = value[0].ToInt();
+
+                                value = tiff.GetField(TiffTag.TILEWIDTH);
+                                int tileWidth = value[0].ToInt();
+
+                                value = tiff.GetField(TiffTag.TILELENGTH);
+                                int tileLength = value[0].ToInt();
+
+                                byte[] buf = new byte[tiff.TileSize()];
+                                for (int y = 0; y < imageLength; y += tileLength)
                                 {
-                                    if (geotiffdata.bits == 16)
+                                    for (int x = 0; x < imageWidth; x += tileWidth)
                                     {
-                                        altdata[row, col] = (short) ((scanline[col*2 + 1] << 8) + scanline[col*2]);
+                                        tiff.ReadTile(buf, 0, x, y, 0, 0);
+
+                                        for (int row = 0; row < tileLength; row++)
+                                        {
+                                            for (int col = 0; col < tileWidth; col++)
+                                            {
+                                                if (x + col >= imageWidth || y + row >= imageLength)
+                                                    break;
+
+                                                if (geotiffdata.bits == 16)
+                                                {
+                                                    altdata[y + row, x + col] =
+                                                        (short) ((buf[row * tileWidth * 2 + col * 2 + 1] << 8) + buf[row * tileWidth * 2 + col * 2]);
+                                                }
+                                                else if (geotiffdata.bits == 32)
+                                                {
+                                                    altdata[y + row, x + col] =
+                                                        (float) BitConverter.ToSingle(buf, row * tileWidth * 4 + col * 4);
+                                                }
+                                            }
+                                        }
                                     }
-                                    else if (geotiffdata.bits == 32)
+                                }
+                            }
+                            else
+                            {
+
+                                byte[] scanline = new byte[tiff.ScanlineSize()];
+
+                                for (int row = 0; row < geotiffdata.height; row++)
+                                {
+                                    tiff.ReadScanline(scanline, row);
+
+                                    for (int col = 0; col < geotiffdata.width; col++)
                                     {
-                                        altdata[row, col] = (short) BitConverter.ToSingle(scanline, col*4);
+                                        if (geotiffdata.bits == 16)
+                                        {
+                                            altdata[row, col] =
+                                                (short) ((scanline[col * 2 + 1] << 8) + scanline[col * 2]);
+                                        }
+                                        else if (geotiffdata.bits == 32)
+                                        {
+                                            altdata[row, col] = (float) BitConverter.ToSingle(scanline, col * 4);
+                                        }
                                     }
                                 }
                             }
@@ -186,10 +250,10 @@ namespace MissionPlanner.Utilities
 
                     // y_int = (geotiffdata.height - 2) - y_int;
 
-                    double alt00 = GetAlt(geotiffdata.FileName, x_int, y_int);
-                    double alt10 = GetAlt(geotiffdata.FileName, x_int + 1, y_int);
-                    double alt01 = GetAlt(geotiffdata.FileName, x_int, y_int + 1);
-                    double alt11 = GetAlt(geotiffdata.FileName, x_int + 1, y_int + 1);
+                    double alt00 = GetAlt(geotiffdata, x_int, y_int);
+                    double alt10 = GetAlt(geotiffdata, x_int + 1, y_int);
+                    double alt01 = GetAlt(geotiffdata, x_int, y_int + 1);
+                    double alt11 = GetAlt(geotiffdata, x_int + 1, y_int + 1);
 
                     double v1 = avg(alt00, alt10, x_frac);
                     double v2 = avg(alt01, alt11, x_frac);
@@ -206,9 +270,38 @@ namespace MissionPlanner.Utilities
             return srtm.altresponce.Invalid;
         }
 
-        private static double GetAlt(string filename, int x, int y)
+        private static double GetAltNoCache(geotiffdata geotiffdata, int x, int y)
         {
-            return cache[filename][x, y];
+            using (Tiff tiff = Tiff.Open(geotiffdata.FileName, "r"))
+            {
+                byte[] scanline = new byte[tiff.ScanlineSize()];
+
+                for (int row = 0; row < geotiffdata.height; row++)
+                {
+                    tiff.ReadScanline(scanline, x);
+
+                    if (geotiffdata.bits == 16)
+                    {
+                        return (short)((scanline[y * 2 + 1] << 8) + scanline[y * 2]);
+                    }
+                    else if (geotiffdata.bits == 32)
+                    {
+                        return BitConverter.ToSingle(scanline, y * 4);
+                    }
+                }
+            }
+
+            throw new Exception("GetAltNoCache: Invalid geotiff coord");
+        }
+
+        private static double GetAlt(geotiffdata geotiffdata, int x, int y)
+        {
+            // if the image is to large use the direct to file approach
+            if (!geotiffdata.cacheable)
+                return GetAltNoCache(geotiffdata, x, y);
+
+            // use our cache
+            return cache[geotiffdata.FileName][x, y];
         }
 
         private static double avg(double v1, double v2, double weight)
